@@ -17,10 +17,21 @@ command -v jq >/dev/null || { echo "jq not found" >&2; exit 2; }
 
 export MCP_GATEWAY_AUTH_TOKEN="${MCP_GATEWAY_AUTH_TOKEN:-$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 
-cleanup() { [[ $KEEP -eq 1 ]] || "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true; }
+# Containers the gateway spawns itself (servers, L7 egress proxies) are not
+# owned by Compose; remember what existed so cleanup removes only ours.
+before="$(docker ps -aq --filter label=docker-mcp=true | sort)"
+cleanup() {
+  [[ $KEEP -eq 1 ]] && return 0
+  "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
+  local after new
+  after="$(docker ps -aq --filter label=docker-mcp=true | sort)"
+  new="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sed '/^$/d')"
+  # shellcheck disable=SC2086
+  [[ -n "$new" ]] && docker rm -f $new >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
 
-"${COMPOSE[@]}" up -d
+"${COMPOSE[@]}" up -d mcp-gateway
 
 echo "waiting for mcp-gateway to become healthy..."
 for _ in $(seq 1 60); do
@@ -32,6 +43,20 @@ done
 if [[ "$status" != "healthy" ]]; then
   echo "FAIL: gateway status '$status'" >&2
   "${COMPOSE[@]}" logs --tail 80 mcp-gateway docker-socket-proxy >&2
+  exit 1
+fi
+
+# The filtered socket must allow container ops but deny exec/volumes/system.
+project="$("${COMPOSE[@]}" config --format json | jq -r .name)"
+probe="$(docker run --rm --network none --entrypoint sh \
+  -v "${project}_docker-api-socket:/run:ro" "docker/mcp-gateway:${MCP_GATEWAY_TAG:-latest}" -c '
+    docker ps -q >/dev/null 2>&1 && echo containers=allow || echo containers=deny
+    docker volume ls >/dev/null 2>&1 && echo volumes=allow || echo volumes=deny
+    docker system df >/dev/null 2>&1 && echo system=allow || echo system=deny
+  ')"
+echo "    socket proxy: $(printf '%s' "$probe" | tr '\n' ' ')"
+if [[ "$probe" != *"containers=allow"* || "$probe" != *"volumes=deny"* || "$probe" != *"system=deny"* ]]; then
+  echo "FAIL: socket proxy filtering is not as expected" >&2
   exit 1
 fi
 
@@ -53,7 +78,7 @@ post() { # $1 = JSON body; prints JSON payload(s), handles SSE framing
     -H 'Accept: application/json, text/event-stream' \
     -H "MCP-Protocol-Version: $PROTOCOL_VERSION" \
     ${sid_hdr[@]+"${sid_hdr[@]}"} -d "$1" \
-  | sed -n 's/^data: //p; /^{/p'
+  | sed -n -e 's/^data: //p' -e 't' -e '/^{/p'
 }
 
 init="$(post "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"$PROTOCOL_VERSION\",\"capabilities\":{},\"clientInfo\":{\"name\":\"ack-smoke\",\"version\":\"1.0.0\"}}}")"

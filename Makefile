@@ -21,13 +21,12 @@ rules: ## Regenerate .cursorrules and .voidrules from AGENTS.md + .cursor/rules
 
 check: ## Rules drift, compose validity, hardening policy, shellcheck
 	@scripts/sync-rules.sh --check
-	@$(COMPOSE) config -q
-	@$(COMPOSE) --profile gateway config -q
+	@$(COMPOSE) --profile stdio --profile gateway config -q
 	@python3 scripts/verify-hardening.py
 	@if command -v shellcheck >/dev/null; then shellcheck scripts/*.sh; else echo "shellcheck not installed; skipped"; fi
 
 pull: ## Pull stdio-tier images
-	@$(COMPOSE) pull mcp-filesystem mcp-git
+	@$(COMPOSE) --profile stdio pull
 
 smoke: ## Handshake with each stdio server and list its tools
 	@scripts/smoke-test.sh
@@ -39,7 +38,7 @@ token: ## Print a fresh gateway bearer token
 	@openssl rand -hex 32
 
 gateway-up: ## Start the optional HTTP gateway on 127.0.0.1
-	@$(COMPOSE) --profile gateway up -d
+	@$(COMPOSE) --profile gateway up -d --wait mcp-gateway
 
 gateway-down: ## Stop the gateway profile
 	@$(COMPOSE) --profile gateway down --remove-orphans
@@ -47,5 +46,7 @@ gateway-down: ## Stop the gateway profile
 gateway-logs: ## Follow gateway logs
 	@$(COMPOSE) --profile gateway logs -f mcp-gateway
 
-clean: ## Remove stopped kit containers
+clean: ## Stop the gateway and remove containers it spawned (label docker-mcp=true)
 	@$(COMPOSE) --profile gateway down --remove-orphans
+	@ids="$$(docker ps -aq --filter label=docker-mcp=true)"; \
+	  if [ -n "$$ids" ]; then echo "removing gateway-spawned containers: $$ids"; docker rm -f $$ids >/dev/null; fi

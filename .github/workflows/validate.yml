@@ -33,10 +33,8 @@ jobs:
             jq -e . "$f" > /dev/null && echo "ok  $f"
           done
 
-      - name: Compose config is valid (default and gateway profiles)
-        run: |
-          docker compose config -q
-          docker compose --profile gateway config -q
+      - name: Compose config is valid (all profiles)
+        run: docker compose --profile stdio --profile gateway config -q
 
       - name: Hardening policy
         run: python3 scripts/verify-hardening.py
@@ -52,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Pull images
-        run: docker compose pull mcp-filesystem mcp-git
+        run: docker compose --profile stdio pull
       - name: MCP handshake + tools/list
         run: scripts/smoke-test.sh
 
@@ -63,5 +61,5 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - name: Gateway health, auth rejection, tools/list
+      - name: Proxy filtering, health, auth rejection, tools/list
         run: scripts/smoke-gateway.sh

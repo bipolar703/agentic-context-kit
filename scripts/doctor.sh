@@ -57,9 +57,9 @@ if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
   for img in "mcp/filesystem:$(env_get MCP_FILESYSTEM_TAG)" "mcp/git:$(env_get MCP_GIT_TAG)"; do
     img="${img%:}"; [[ "$img" == *:* ]] || img="$img:latest"
     if docker image inspect "$img" >/dev/null 2>&1; then pass "$img pulled"
-    else warn "$img not pulled yet (first client launch will be slow). Run: docker compose pull"; fi
+    else warn "$img not pulled yet (first client launch will be slow). Run: docker compose --profile stdio pull"; fi
   done
-  if docker compose config -q 2>/dev/null; then pass "compose config valid"; else fail "docker compose config failed"; fi
+  if docker compose --profile stdio --profile gateway config -q 2>/dev/null; then pass "compose config valid"; else fail "docker compose config failed"; fi
 fi
 
 echo "Gateway (optional)"
