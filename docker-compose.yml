@@ -1,0 +1,176 @@
+# agentic-context-kit: local MCP tool runtime
+# ---------------------------------------------------------------------------
+# Tier 1 (default, no profile): hardened stdio MCP servers.
+#   Your editor spawns them on demand:  docker compose run --rm -T <service>
+#   No network, no Docker socket, read-only rootfs, every capability dropped,
+#   host UID/GID, and exactly one bind mount (your workspace).
+#
+# Tier 2 (--profile gateway): Docker MCP Gateway over streamable HTTP.
+#   Bound to 127.0.0.1, bearer-token auth, and a filtered Docker API proxy
+#   instead of a raw /var/run/docker.sock mount.
+#
+# Validate:        docker compose config -q
+# Policy check:    python3 scripts/verify-hardening.py
+# Pin by digest:   docker buildx imagetools inspect mcp/filesystem:latest
+# ---------------------------------------------------------------------------
+
+name: agentic-context-kit
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m
+  pids_limit: 128
+  mem_limit: ${MCP_MEM_LIMIT:-512m}
+  cpus: ${MCP_CPUS:-1.0}
+  init: true                # reap zombies, forward signals from the client
+  stdin_open: true          # stdio transport needs an open stdin
+  tty: false                # a TTY corrupts JSON-RPC framing
+  restart: "no"             # stdio servers live and die with the client
+  logging:
+    driver: local
+    options:
+      max-size: "5m"
+      max-file: "2"
+
+x-no-telemetry: &no-telemetry
+  DO_NOT_TRACK: "1"
+  NO_UPDATE_NOTIFIER: "1"
+  NPM_CONFIG_UPDATE_NOTIFIER: "false"
+  NEXT_TELEMETRY_DISABLED: "1"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  HOME: /tmp
+
+services:
+  # -------------------------------------------------------------------------
+  # Filesystem MCP server (stdio). Sees ONLY ${WORKSPACE_DIR}, read-only by
+  # default. Set WORKSPACE_MODE=rw in .env to let the agent write files.
+  # -------------------------------------------------------------------------
+  mcp-filesystem:
+    <<: *hardened
+    image: mcp/filesystem:${MCP_FILESYSTEM_TAG:-latest}
+    network_mode: none
+    environment:
+      <<: *no-telemetry
+    volumes:
+      - ${WORKSPACE_DIR:-.}:/workspace:${WORKSPACE_MODE:-ro}
+    command: ["/workspace"]
+
+  # -------------------------------------------------------------------------
+  # Git MCP server (stdio). Same single mount, no network: it can inspect
+  # history and diffs but can never fetch or push.
+  # -------------------------------------------------------------------------
+  mcp-git:
+    <<: *hardened
+    image: mcp/git:${MCP_GIT_TAG:-latest}
+    network_mode: none
+    working_dir: /workspace
+    environment:
+      <<: *no-telemetry
+      # Docker Desktop may present files with a different owner; trust the mount.
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: "*"
+    volumes:
+      - ${WORKSPACE_DIR:-.}:/workspace:${WORKSPACE_MODE:-ro}
+
+  # -------------------------------------------------------------------------
+  # OPTIONAL: filtered Docker API for the gateway (profile: gateway).
+  # The gateway starts MCP servers as sibling containers, so it needs the
+  # Docker API. This proxy removes exec/build/volumes/secrets/swarm/system.
+  # It is NOT a sandbox: container-create rights remain powerful.
+  # -------------------------------------------------------------------------
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:${SOCKET_PROXY_TAG:-latest}
+    profiles: [gateway]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /run
+    environment:
+      LOG_LEVEL: warning
+      PING: "1"
+      VERSION: "1"
+      EVENTS: "1"
+      INFO: "1"
+      CONTAINERS: "1"
+      IMAGES: "1"
+      NETWORKS: "1"
+      DISTRIBUTION: "1"   # image signature/manifest lookups
+      POST: "1"           # required to create/start MCP server containers
+      ALLOW_START: "1"
+      ALLOW_STOP: "1"
+      EXEC: "0"
+      BUILD: "0"
+      COMMIT: "0"
+      VOLUMES: "0"
+      SECRETS: "0"
+      CONFIGS: "0"
+      AUTH: "0"
+      SWARM: "0"
+      SERVICES: "0"
+      TASKS: "0"
+      NODES: "0"
+      PLUGINS: "0"
+      SYSTEM: "0"
+      SESSION: "0"
+      GRPC: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [docker-api]
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # OPTIONAL: Docker MCP Gateway, streamable HTTP (profile: gateway).
+  # Endpoint:  http://127.0.0.1:${GATEWAY_PORT}/mcp
+  # Auth:      Authorization: Bearer ${MCP_GATEWAY_AUTH_TOKEN}
+  #            (if unset, the gateway generates one and prints it to the log)
+  # -------------------------------------------------------------------------
+  mcp-gateway:
+    image: docker/mcp-gateway:${MCP_GATEWAY_TAG:-latest}
+    profiles: [gateway]
+    depends_on: [docker-socket-proxy]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /root               # gateway caches catalogs under ~/.docker/mcp
+    environment:
+      DO_NOT_TRACK: "1"
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      MCP_GATEWAY_AUTH_TOKEN: ${MCP_GATEWAY_AUTH_TOKEN:-}
+    command:
+      - --transport=streaming
+      - --port=${GATEWAY_PORT:-8811}
+      - --servers=${GATEWAY_SERVERS:-duckduckgo}
+      - --verify-signatures
+      - --block-secrets
+      - --block-network
+      - --log-calls
+      - --cpus=1
+      - --memory=1Gb
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8811}:${GATEWAY_PORT:-8811}"
+    healthcheck:
+      # /health is unauthenticated by design in the gateway
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${GATEWAY_PORT:-8811}/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    networks: [docker-api, gateway-edge]
+    restart: unless-stopped
+
+networks:
+  docker-api:
+    internal: true          # the proxy is unreachable from outside the stack
+  gateway-edge: {}
