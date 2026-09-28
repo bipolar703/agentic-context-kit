@@ -1,0 +1,44 @@
+name: Bug report
+description: Something in the kit does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Include the exact command and the error output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `make doctor`
+      description: Remove any paths or values you consider private.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Host OS
+      options: [Linux, macOS, Windows (WSL), Windows (Git Bash), Other]
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: MCP client and version
+      placeholder: Cursor 2.x, VS Code 1.x, Claude Code ...
+  - type: checkboxes
+    id: security
+    attributes:
+      label: Security
+      options:
+        - label: This is NOT a security vulnerability (those go through SECURITY.md)
+          required: true

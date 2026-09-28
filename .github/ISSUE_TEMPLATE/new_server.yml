@@ -1,0 +1,38 @@
+name: New MCP server
+description: Propose adding an MCP server to the stdio or gateway tier
+labels: [new-server]
+body:
+  - type: input
+    id: image
+    attributes:
+      label: Image and source repository
+      placeholder: mcp/example — https://github.com/...
+    validations:
+      required: true
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Tier
+      options: [stdio (preferred), gateway]
+    validations:
+      required: true
+  - type: dropdown
+    id: network
+    attributes:
+      label: Needs network access?
+      options: ["No", "Yes (explain below)"]
+    validations:
+      required: true
+  - type: dropdown
+    id: root
+    attributes:
+      label: Runs as a non-root UID?
+      options: ["Yes", "No (explain below)", "Unknown"]
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Use case and justification
+    validations:
+      required: true
