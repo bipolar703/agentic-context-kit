@@ -28,6 +28,7 @@ COMPOSE_FILE = ROOT / "docker-compose.yml"
 DOCKER_SOCK = "/var/run/docker.sock"
 # Services allowed to touch the Docker API, and how.
 SOCKET_PROXY = "docker-socket-proxy"
+ROOT_REASON_LABEL = "io.agentic-context-kit.root-reason"
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
 
@@ -36,8 +37,8 @@ def load_model(json_path: str | None) -> dict[str, Any]:
         return json.loads(Path(json_path).read_text(encoding="utf-8"))
     if shutil.which("docker"):
         proc = subprocess.run(
-            ["docker", "compose", "-f", str(COMPOSE_FILE), "--profile", "gateway",
-             "config", "--format", "json"],
+            ["docker", "compose", "-f", str(COMPOSE_FILE), "--profile", "stdio",
+             "--profile", "gateway", "config", "--format", "json"],
             cwd=ROOT, capture_output=True, text=True, check=False,
         )
         if proc.returncode == 0:
@@ -103,10 +104,12 @@ def check(model: dict[str, Any]) -> tuple[list[str], list[str]]:
     services: dict[str, dict[str, Any]] = model.get("services", {})
     if not services:
         return ["no services found"], warnings
+    if not any("stdio" in (s.get("profiles") or []) for s in services.values()):
+        errors.append("no services in the 'stdio' profile; was the model rendered with --profile stdio?")
 
     for name, svc in services.items():
         e = lambda msg, n=name: errors.append(f"{n}: {msg}")  # noqa: E731
-        is_stdio_tier = not svc.get("profiles")
+        is_stdio_tier = "stdio" in (svc.get("profiles") or [])
 
         # Universal controls
         if svc.get("read_only") is not True:
@@ -136,14 +139,32 @@ def check(model: dict[str, Any]) -> tuple[list[str], list[str]]:
                 elif not ro:
                     e(f"{DOCKER_SOCK} must be mounted read-only")
 
+        env = svc.get("environment", {}) or {}
+        if isinstance(env, list):
+            env = dict(item.split("=", 1) for item in env if "=" in item)
+        if str(env.get("DOCKER_HOST", "")).startswith("tcp://"):
+            e("DOCKER_HOST over TCP exposes the Docker API to every container on that network; "
+              "share the proxy's UNIX socket via a volume instead")
+        if name == SOCKET_PROXY and svc.get("network_mode") != "none":
+            e("socket proxy must use network_mode: none (MCP servers inherit gateway networks)")
+
         # Stdio tier: strict sandbox
         if is_stdio_tier:
             if svc.get("network_mode") != "none":
                 e("stdio-tier servers must use network_mode: none")
             if svc.get("ports"):
                 e("stdio-tier servers must not publish ports")
-            if not svc.get("user"):
+            user = str(svc.get("user", ""))
+            if not user:
                 e("stdio-tier servers must set user (host UID:GID)")
+            elif user.split(":")[0] in ("0", "root"):
+                labels = svc.get("labels", {}) or {}
+                if isinstance(labels, list):
+                    labels = dict(item.split("=", 1) for item in labels if "=" in item)
+                if not labels.get(ROOT_REASON_LABEL):
+                    e(f"runs as root without a '{ROOT_REASON_LABEL}' label explaining why")
+                else:
+                    warnings.append(f"{name}: runs as root ({labels[ROOT_REASON_LABEL]}); capabilities still dropped")
             if svc.get("tty"):
                 e("tty must be false (a TTY corrupts JSON-RPC framing)")
             if not svc.get("stdin_open"):

@@ -1,15 +1,17 @@
 # agentic-context-kit: local MCP tool runtime
 # ---------------------------------------------------------------------------
-# Tier 1 (default, no profile): hardened stdio MCP servers.
+# Tier 1 (profile: stdio): hardened stdio MCP servers.
 #   Your editor spawns them on demand:  docker compose run --rm -T <service>
+#   (`run` activates a service's profile automatically; the profile only keeps
+#   a plain `docker compose up` from starting idle stdio containers.)
 #   No network, no Docker socket, read-only rootfs, every capability dropped,
 #   host UID/GID, and exactly one bind mount (your workspace).
 #
 # Tier 2 (--profile gateway): Docker MCP Gateway over streamable HTTP.
 #   Bound to 127.0.0.1, bearer-token auth, and a filtered Docker API proxy
-#   instead of a raw /var/run/docker.sock mount.
+#   (network-less, shared over a UNIX socket) instead of the raw host socket.
 #
-# Validate:        docker compose config -q
+# Validate:        docker compose --profile stdio --profile gateway config -q
 # Policy check:    python3 scripts/verify-hardening.py
 # Pin by digest:   docker buildx imagetools inspect mcp/filesystem:latest
 # ---------------------------------------------------------------------------
@@ -52,6 +54,7 @@ services:
   # -------------------------------------------------------------------------
   mcp-filesystem:
     <<: *hardened
+    profiles: [stdio]
     image: mcp/filesystem:${MCP_FILESYSTEM_TAG:-latest}
     network_mode: none
     environment:
@@ -66,8 +69,15 @@ services:
   # -------------------------------------------------------------------------
   mcp-git:
     <<: *hardened
+    profiles: [stdio]
     image: mcp/git:${MCP_GIT_TAG:-latest}
     network_mode: none
+    # The image's Python interpreter lives under /root (mode 700), so a
+    # non-root UID cannot exec it. Root here still has ALL capabilities
+    # dropped (no DAC_OVERRIDE), no network, and a read-only rootfs/mount.
+    user: "0:0"
+    labels:
+      io.agentic-context-kit.root-reason: "upstream image installs Python under /root (0700)"
     working_dir: /workspace
     environment:
       <<: *no-telemetry
@@ -81,12 +91,16 @@ services:
   # -------------------------------------------------------------------------
   # OPTIONAL: filtered Docker API for the gateway (profile: gateway).
   # The gateway starts MCP servers as sibling containers, so it needs the
-  # Docker API. This proxy removes exec/build/volumes/secrets/swarm/system.
-  # It is NOT a sandbox: container-create rights remain powerful.
+  # Docker API. This proxy removes exec/build/volumes/secrets/swarm/system and
+  # exposes the rest as a UNIX socket on a shared volume. It has NO network:
+  # MCP server containers join the gateway's networks, so a TCP proxy on a
+  # shared network would hand them the Docker API. A socket file does not.
+  # It is still NOT a sandbox: container-create rights remain powerful.
   # -------------------------------------------------------------------------
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy:${SOCKET_PROXY_TAG:-latest}
     profiles: [gateway]
+    network_mode: none
     read_only: true
     cap_drop: [ALL]
     security_opt:
@@ -95,6 +109,7 @@ services:
       - /tmp
       - /run
     environment:
+      BIND_CONFIG: /sock/docker.sock mode 600
       LOG_LEVEL: warning
       PING: "1"
       VERSION: "1"
@@ -103,7 +118,7 @@ services:
       CONTAINERS: "1"
       IMAGES: "1"
       NETWORKS: "1"
-      DISTRIBUTION: "1"   # image signature/manifest lookups
+      DISTRIBUTION: "1"   # image manifest lookups
       POST: "1"           # required to create/start MCP server containers
       ALLOW_START: "1"
       ALLOW_STOP: "1"
@@ -124,7 +139,12 @@ services:
       GRPC: "0"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks: [docker-api]
+      - docker-api-socket:/sock
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /sock/docker.sock"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
     restart: unless-stopped
 
   # -------------------------------------------------------------------------
@@ -132,11 +152,15 @@ services:
   # Endpoint:  http://127.0.0.1:${GATEWAY_PORT}/mcp
   # Auth:      Authorization: Bearer ${MCP_GATEWAY_AUTH_TOKEN}
   #            (if unset, the gateway generates one and prints it to the log)
+  # The proxied socket is mounted at /run, so /var/run/docker.sock inside the
+  # gateway is the filtered API, never the host socket.
   # -------------------------------------------------------------------------
   mcp-gateway:
     image: docker/mcp-gateway:${MCP_GATEWAY_TAG:-latest}
     profiles: [gateway]
-    depends_on: [docker-socket-proxy]
+    depends_on:
+      docker-socket-proxy:
+        condition: service_healthy
     read_only: true
     cap_drop: [ALL]
     security_opt:
@@ -144,9 +168,10 @@ services:
     tmpfs:
       - /tmp
       - /root               # gateway caches catalogs under ~/.docker/mcp
+    volumes:
+      - docker-api-socket:/run
     environment:
       DO_NOT_TRACK: "1"
-      DOCKER_HOST: tcp://docker-socket-proxy:2375
       MCP_GATEWAY_AUTH_TOKEN: ${MCP_GATEWAY_AUTH_TOKEN:-}
     command:
       - --transport=streaming
@@ -167,10 +192,11 @@ services:
       timeout: 3s
       retries: 6
       start_period: 20s
-    networks: [docker-api, gateway-edge]
+    networks: [gateway-edge]
     restart: unless-stopped
 
 networks:
-  docker-api:
-    internal: true          # the proxy is unreachable from outside the stack
   gateway-edge: {}
+
+volumes:
+  docker-api-socket: {}
