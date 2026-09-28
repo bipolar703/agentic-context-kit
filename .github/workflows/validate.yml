@@ -1,0 +1,67 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Rules are in sync and within budget
+        run: scripts/sync-rules.sh --check
+
+      - name: Shellcheck
+        run: shellcheck scripts/*.sh
+
+      - name: JSON client configs parse
+        run: |
+          for f in .cursor/mcp.json .vscode/mcp.json .mcp.json; do
+            jq -e . "$f" > /dev/null && echo "ok  $f"
+          done
+
+      - name: Compose config is valid (default and gateway profiles)
+        run: |
+          docker compose config -q
+          docker compose --profile gateway config -q
+
+      - name: Hardening policy
+        run: python3 scripts/verify-hardening.py
+
+      - name: No CRLF in shell scripts
+        run: "! grep -lI $'\\r' scripts/*.sh"
+
+  smoke-stdio:
+    name: Smoke test (stdio servers)
+    needs: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Pull images
+        run: docker compose pull mcp-filesystem mcp-git
+      - name: MCP handshake + tools/list
+        run: scripts/smoke-test.sh
+
+  smoke-gateway:
+    name: Smoke test (gateway profile)
+    needs: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Gateway health, auth rejection, tools/list
+        run: scripts/smoke-gateway.sh
