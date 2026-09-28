@@ -1,0 +1,36 @@
+# Secrets and local overrides
+.env
+.env.*
+!.env.example
+CLAUDE.local.md
+*.local.md
+docker-compose.override.yml
+compose.override.yaml
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.idea/
+
+# Keep shared editor config, ignore personal state
+.vscode/*
+!.vscode/mcp.json
+!.vscode/extensions.json
+
+# Language artifacts (for projects built on this template)
+node_modules/
+dist/
+build/
+coverage/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Placeholder workspace used when WORKSPACE_DIR is unset
+/workspace/

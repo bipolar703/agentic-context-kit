@@ -1,0 +1,11 @@
+# Normalize line endings; shell scripts MUST stay LF or they break in containers/WSL.
+* text=auto eol=lf
+*.sh  text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.png binary
+*.jpg binary
+
+# Generated from AGENTS.md + .cursor/rules/*.mdc by scripts/sync-rules.sh
+.cursorrules linguist-generated=true
+.voidrules   linguist-generated=true
