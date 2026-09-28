@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "compose",
+        "--project-directory", "${workspaceFolder}",
+        "-f", "${workspaceFolder}/docker-compose.yml",
+        "run", "--rm", "-T", "mcp-filesystem"
+      ]
+    },
+    "git": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "compose",
+        "--project-directory", "${workspaceFolder}",
+        "-f", "${workspaceFolder}/docker-compose.yml",
+        "run", "--rm", "-T", "mcp-git"
+      ]
+    }
+  }
+}

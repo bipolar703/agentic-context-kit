@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "docker",
+      "args": ["compose", "-f", "docker-compose.yml", "run", "--rm", "-T", "mcp-filesystem"]
+    },
+    "git": {
+      "command": "docker",
+      "args": ["compose", "-f", "docker-compose.yml", "run", "--rm", "-T", "mcp-git"]
+    }
+  }
+}
