@@ -1,0 +1,15 @@
+---
+description: Dockerfile and Compose conventions
+globs: **/Dockerfile*,**/*compose*.yml,**/*compose*.yaml,**/.dockerignore
+alwaysApply: false
+---
+# Docker
+
+- Multi-stage builds. Final stage is slim or distroless, runs as a non-root `USER`, and contains no build tools or secrets.
+- Pin base images by tag and digest in production. Order layers for cache hits: dependency manifests before source.
+- Keep `.dockerignore` current (`.git`, `node_modules`, `.venv`, `.env*`, test artifacts).
+- Compose services default to `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true`, resource limits, and a healthcheck when long-running.
+- Publish ports on `127.0.0.1` unless LAN exposure is explicitly requested.
+- Never mount `/var/run/docker.sock` directly. If Docker API access is unavoidable, use the socket proxy pattern in `docker-compose.yml` and state the risk.
+- New MCP servers reuse the `*hardened` anchor and `network_mode: none` unless they truly need the network.
+- Verify with `docker compose config -q` and `python3 scripts/verify-hardening.py`; run `hadolint` on Dockerfiles when available.

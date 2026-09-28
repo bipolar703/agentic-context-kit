@@ -1,0 +1,15 @@
+---
+description: TypeScript and Node.js conventions
+globs: **/*.ts,**/*.tsx,**/*.mts,**/*.cts,**/package.json,**/tsconfig*.json
+alwaysApply: false
+---
+# TypeScript
+
+- `strict: true`. No `any`; use `unknown` and narrow. No non-null `!` without a justifying comment.
+- ESM only. Named exports; default exports only where a framework requires them.
+- Validate every external input (HTTP, env, files, LLM or tool output) at the boundary with the repo's validator (zod if none exists).
+- Errors: throw typed `Error` subclasses or return `{ ok: true, value } | { ok: false, error }`. Never swallow errors.
+- No floating promises: `await`, or `void` with a reason. Pass `AbortSignal` to cancellable I/O.
+- Use the package manager implied by the lockfile (`pnpm-lock.yaml` pnpm, `package-lock.json` npm, `bun.lock` bun, `yarn.lock` yarn). Never mix.
+- Tests: the existing runner (vitest if none). Colocate `*.test.ts`. Test behavior, not implementation details.
+- Verify with the repo's scripts, typically `typecheck`, `lint`, `test`. Report which ones you ran.

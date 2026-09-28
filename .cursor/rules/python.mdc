@@ -1,0 +1,14 @@
+---
+description: Python conventions
+globs: **/*.py,**/pyproject.toml
+alwaysApply: false
+---
+# Python
+
+- Python 3.11 or newer. Type hints on all public functions; pass the configured checker (`mypy --strict` or `pyright`).
+- Tooling: `uv` for environments and dependencies, `ruff` for lint and format, `pytest` for tests. Do not add black, isort, or flake8 next to ruff.
+- Dependencies live in `pyproject.toml`. Never `pip install` into a global interpreter.
+- Prefer `pathlib`, f-strings, `dataclasses` or pydantic v2 models. No mutable default arguments. No bare `except:`.
+- Async code uses `asyncio` and `httpx.AsyncClient`; never block the event loop with synchronous I/O.
+- Use `logging` (or `structlog`), not `print`, in library code.
+- Verify with `uv run ruff check`, `uv run ruff format --check`, `uv run pytest`. Report results.
